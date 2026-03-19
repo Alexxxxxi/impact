@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { ARButton } from 'three/examples/jsm/webxr/ARButton.js';
 import { motion, AnimatePresence } from 'motion/react';
-import { Camera, MapPin, Trophy, Navigation, RefreshCw, X } from 'lucide-react';
+import { Camera, MapPin, Trophy, Navigation, RefreshCw, X, Scan } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
@@ -10,144 +11,52 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // --- Constants ---
-const PATH_LENGTH = 15; // Simulated distance to the prize
-const DOT_SPACING = 1.5;
+const PATH_LENGTH = 10; // 10 meters path
+const DOT_SPACING = 1.0;
 const GAME_STATES = {
   START: 'START',
-  HUNTING: 'HUNTING',
-  REACHED: 'REACHED',
+  SCANNING: 'SCANNING',
+  PLACED: 'PLACED',
   SUCCESS: 'SUCCESS',
 };
 
 export default function ARGame() {
   const [gameState, setGameState] = useState(GAME_STATES.START);
-  const [progress, setProgress] = useState(0); // 0 to 1
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [isOriented, setIsOriented] = useState(false);
-  const [needsPermission, setNeedsPermission] = useState(false);
+  const [distance, setDistance] = useState<number | null>(null);
+  const [arSupported, setArSupported] = useState<boolean | null>(null);
+  const [isHitTestReady, setIsHitTestReady] = useState(false);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const lastStepTime = useRef(0);
-  const stepThreshold = 12; // Accelerometer threshold for step detection
   const sceneRef = useRef<{
     scene: THREE.Scene;
     camera: THREE.PerspectiveCamera;
     renderer: THREE.WebGLRenderer;
+    reticle: THREE.Mesh;
     tomato: THREE.Group;
     pathGroup: THREE.Group;
-    box: THREE.Mesh;
+    hitTestSource: XRHitTestSource | null;
+    hitTestSourceRequested: boolean;
   } | null>(null);
 
-  // --- Permissions and Motion Setup ---
-  const motionCleanup = useRef<(() => void) | null>(null);
-
-  const requestPermissions = async () => {
-    // For iOS 13+
-    if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-      try {
-        const orientationRes = await (DeviceOrientationEvent as any).requestPermission();
-        const motionRes = await (DeviceMotionEvent as any).requestPermission();
-        if (orientationRes === 'granted' && motionRes === 'granted') {
-          setNeedsPermission(false);
-          motionCleanup.current = setupMotionListeners();
-        }
-      } catch (err) {
-        console.error('Permission error:', err);
-      }
-    } else {
-      // Non-iOS or older versions
-      setNeedsPermission(false);
-      motionCleanup.current = setupMotionListeners();
-    }
-  };
-
-  const setupMotionListeners = () => {
-    // Device Orientation
-    const handleOrientation = (e: DeviceOrientationEvent) => {
-      if (!sceneRef.current) return;
-      setIsOriented(true);
-      const { camera } = sceneRef.current;
-      
-      const alpha = e.alpha ? THREE.MathUtils.degToRad(e.alpha) : 0;
-      const beta = e.beta ? THREE.MathUtils.degToRad(e.beta) : 0;
-      const gamma = e.gamma ? THREE.MathUtils.degToRad(e.gamma) : 0;
-
-      // Simplified AR orientation
-      camera.rotation.set(beta - Math.PI / 2, gamma, alpha, 'YXZ');
-    };
-
-    // Step Detection (Device Motion)
-    const handleMotion = (e: DeviceMotionEvent) => {
-      if (gameState !== GAME_STATES.HUNTING) return;
-      
-      const acc = e.accelerationIncludingGravity;
-      if (!acc) return;
-
-      const magnitude = Math.sqrt((acc.x || 0) ** 2 + (acc.y || 0) ** 2 + (acc.z || 0) ** 2);
-      const now = Date.now();
-
-      // Detect step based on acceleration spike
-      if (magnitude > stepThreshold && now - lastStepTime.current > 400) {
-        lastStepTime.current = now;
-        setProgress(prev => Math.min(prev + 0.02, 1)); // Advance 2% per step
-      }
-    };
-
-    window.addEventListener('deviceorientation', handleOrientation);
-    window.addEventListener('devicemotion', handleMotion);
-
-    return () => {
-      window.removeEventListener('deviceorientation', handleOrientation);
-      window.removeEventListener('devicemotion', handleMotion);
-    };
-  };
-
+  // --- WebXR Support Check ---
   useEffect(() => {
-    // Check if we need to ask for permission (iOS specific)
-    if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
-      setNeedsPermission(true);
+    if ('xr' in navigator) {
+      (navigator as any).xr.isSessionSupported('immersive-ar').then((supported: boolean) => {
+        setArSupported(supported);
+      });
     } else {
-      motionCleanup.current = setupMotionListeners();
+      setArSupported(false);
     }
-
-    return () => {
-      if (motionCleanup.current) motionCleanup.current();
-    };
-  }, [gameState]);
-
-  // --- Camera Setup ---
-  useEffect(() => {
-    async function setupCamera() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-          audio: false,
-        });
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-      } catch (err) {
-        console.error('Error accessing camera:', err);
-        setCameraError('Unable to access camera. Please ensure permissions are granted.');
-      }
-    }
-    setupCamera();
-
-    return () => {
-      if (videoRef.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
-      }
-    };
   }, []);
 
   // --- Three.js Setup ---
   useEffect(() => {
-    if (!canvasRef.current) return;
+    if (!canvasRef.current || !containerRef.current) return;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+    
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
       alpha: true,
@@ -155,49 +64,49 @@ export default function ARGame() {
     });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.xr.enabled = true;
 
     // Lights
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
     scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 10, 5);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+    directionalLight.position.set(2, 5, 2);
     scene.add(directionalLight);
 
-    // Path Group
+    // Reticle (Scanning UI)
+    const reticleGeo = new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2);
+    const reticleMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    const reticle = new THREE.Mesh(reticleGeo, reticleMat);
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
+    // Path Group (Hidden initially)
     const pathGroup = new THREE.Group();
+    pathGroup.visible = false;
     scene.add(pathGroup);
 
-    // Create Dots and Arrows
+    // Create Path Dots
     for (let i = 0; i < PATH_LENGTH; i++) {
-      // Dot
-      const dotGeo = new THREE.SphereGeometry(0.05, 16, 16);
-      const dotMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x3b82f6, emissiveIntensity: 0.5 });
+      const dotGeo = new THREE.SphereGeometry(0.04, 16, 16);
+      const dotMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6, emissive: 0x3b82f6, emissiveIntensity: 1 });
       const dot = new THREE.Mesh(dotGeo, dotMat);
-      dot.position.set(0, -1.5, -i * DOT_SPACING - 2);
+      dot.position.set(0, 0.02, -i * DOT_SPACING);
       pathGroup.add(dot);
 
-      // Arrow (every 3 dots)
-      if (i % 3 === 0 && i < PATH_LENGTH - 1) {
-        const arrowGeo = new THREE.ConeGeometry(0.1, 0.3, 16);
+      if (i % 2 === 0 && i < PATH_LENGTH - 1) {
+        const arrowGeo = new THREE.ConeGeometry(0.08, 0.2, 16);
         const arrowMat = new THREE.MeshStandardMaterial({ color: 0xffffff });
         const arrow = new THREE.Mesh(arrowGeo, arrowMat);
         arrow.rotation.x = -Math.PI / 2;
-        arrow.position.set(0, -1.45, -i * DOT_SPACING - 2.5);
+        arrow.position.set(0, 0.05, -i * DOT_SPACING - 0.5);
         pathGroup.add(arrow);
       }
     }
 
-    // Final Box
-    const boxGeo = new THREE.BoxGeometry(1, 0.1, 1);
-    const boxMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
-    const box = new THREE.Mesh(boxGeo, boxMat);
-    box.position.set(0, -1.55, -PATH_LENGTH * DOT_SPACING - 2);
-    box.visible = false;
-    scene.add(box);
-
-    // 3D Tomato (Group of spheres)
+    // Tomato
     const tomato = new THREE.Group();
-    const bodyGeo = new THREE.SphereGeometry(0.3, 32, 32);
+    const bodyGeo = new THREE.SphereGeometry(0.25, 32, 32);
     const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff4444, roughness: 0.3 });
     const body = new THREE.Mesh(bodyGeo, bodyMat);
     tomato.add(body);
@@ -205,97 +114,128 @@ export default function ARGame() {
     const stemGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.1, 8);
     const stemMat = new THREE.MeshStandardMaterial({ color: 0x228b22 });
     const stem = new THREE.Mesh(stemGeo, stemMat);
-    stem.position.y = 0.3;
+    stem.position.y = 0.25;
     tomato.add(stem);
 
-    const leafGeo = new THREE.ConeGeometry(0.05, 0.15, 8);
-    for (let i = 0; i < 4; i++) {
-      const leaf = new THREE.Mesh(leafGeo, stemMat);
-      leaf.position.y = 0.3;
-      leaf.rotation.z = Math.PI / 4;
-      leaf.rotation.y = (i * Math.PI) / 2;
-      tomato.add(leaf);
+    tomato.position.set(0, 0.3, -PATH_LENGTH * DOT_SPACING);
+    pathGroup.add(tomato);
+
+    // Final Box
+    const boxGeo = new THREE.BoxGeometry(0.8, 0.05, 0.8);
+    const boxMat = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.4 });
+    const box = new THREE.Mesh(boxGeo, boxMat);
+    box.position.set(0, 0.025, -PATH_LENGTH * DOT_SPACING);
+    pathGroup.add(box);
+
+    sceneRef.current = { 
+      scene, camera, renderer, reticle, tomato, pathGroup, 
+      hitTestSource: null, hitTestSourceRequested: false,
+      box
+    } as any;
+
+    // WebXR Button
+    const arButton = ARButton.createButton(renderer, {
+      requiredFeatures: ['hit-test'],
+      optionalFeatures: ['dom-overlay'],
+      domOverlay: { root: containerRef.current }
+    });
+    document.body.appendChild(arButton);
+
+    // Controller for interaction
+    const controller = renderer.xr.getController(0);
+    controller.addEventListener('select', onSelect);
+    scene.add(controller);
+
+    function onSelect() {
+      if (sceneRef.current && sceneRef.current.reticle.visible && gameState === GAME_STATES.SCANNING) {
+        const { reticle, pathGroup } = sceneRef.current;
+        
+        // Anchor the path to the reticle position
+        pathGroup.position.setFromMatrixPosition(reticle.matrix);
+        
+        // Orient path towards the camera but keep it flat on ground
+        const camPos = new THREE.Vector3();
+        camera.getWorldPosition(camPos);
+        const lookPos = new THREE.Vector3(camPos.x, pathGroup.position.y, camPos.z);
+        pathGroup.lookAt(lookPos);
+        pathGroup.rotateY(Math.PI); // Flip to face away from camera (forward)
+        
+        pathGroup.visible = true;
+        reticle.visible = false;
+        setGameState(GAME_STATES.PLACED);
+      }
     }
-
-    tomato.position.set(0, -1.2, -PATH_LENGTH * DOT_SPACING - 2);
-    tomato.visible = false;
-    scene.add(tomato);
-
-    sceneRef.current = { scene, camera, renderer, tomato, pathGroup, box };
 
     // Animation Loop
-    const animate = () => {
-      requestAnimationFrame(animate);
-      if (sceneRef.current) {
-        const { renderer, scene, camera, tomato } = sceneRef.current;
-        tomato.rotation.y += 0.02;
-        renderer.render(scene, camera);
+    renderer.setAnimationLoop((timestamp, frame) => {
+      if (!sceneRef.current) return;
+      const { renderer, scene, camera, reticle, pathGroup, tomato } = sceneRef.current;
+
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+
+        if (session && !sceneRef.current.hitTestSourceRequested) {
+          session.requestReferenceSpace('viewer').then((viewerSpace) => {
+            session.requestHitTestSource!({ space: viewerSpace }).then((source) => {
+              sceneRef.current!.hitTestSource = source;
+            });
+          });
+          sceneRef.current.hitTestSourceRequested = true;
+          setIsHitTestReady(true);
+        }
+
+        if (sceneRef.current.hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(sceneRef.current.hitTestSource);
+          if (hitTestResults.length > 0 && gameState === GAME_STATES.SCANNING) {
+            const hit = hitTestResults[0];
+            reticle.visible = true;
+            reticle.matrix.fromArray(hit.getPose(referenceSpace!)!.transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+
+        // Real-time distance calculation
+        if (gameState === GAME_STATES.PLACED) {
+          const camPos = new THREE.Vector3();
+          camera.getWorldPosition(camPos);
+          
+          const tomatoPos = new THREE.Vector3();
+          tomato.getWorldPosition(tomatoPos);
+          
+          const dist = camPos.distanceTo(tomatoPos);
+          setDistance(dist);
+
+          // Success trigger
+          if (dist < 0.6) {
+            setGameState(GAME_STATES.SUCCESS);
+          }
+        }
       }
-    };
-    animate();
 
-    // Handle Resize
-    const handleResize = () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    };
-    window.addEventListener('resize', handleResize);
-
-    // Device Orientation - REMOVED OLD LISTENER (Moved to setupMotionListeners)
+      tomato.rotation.y += 0.02;
+      renderer.render(scene, camera);
+    });
 
     return () => {
-      window.removeEventListener('resize', handleResize);
+      renderer.setAnimationLoop(null);
+      if (arButton.parentNode) arButton.parentNode.removeChild(arButton);
       renderer.dispose();
     };
-  }, []);
+  }, [gameState]);
 
-  // --- Game Logic ---
-  useEffect(() => {
-    if (!sceneRef.current) return;
-    const { pathGroup, tomato, box } = sceneRef.current;
-
-    if (gameState === GAME_STATES.HUNTING) {
-      // Move path towards camera based on progress
-      const targetZ = progress * PATH_LENGTH * DOT_SPACING;
-      pathGroup.position.z = targetZ;
-      tomato.position.z = -PATH_LENGTH * DOT_SPACING - 2 + targetZ;
-      box.position.z = -PATH_LENGTH * DOT_SPACING - 2 + targetZ;
-
-      // Show tomato when close
-      if (progress > 0.8) {
-        tomato.visible = true;
-        box.visible = true;
-      }
-
-      // Check if reached
-      if (progress >= 1) {
-        setGameState(GAME_STATES.REACHED);
-        setTimeout(() => setGameState(GAME_STATES.SUCCESS), 1000);
-      }
-    }
-  }, [progress, gameState]);
-
-  const startHunt = () => {
-    setGameState(GAME_STATES.HUNTING);
-    setProgress(0);
+  const startScanning = () => {
+    setGameState(GAME_STATES.SCANNING);
   };
 
   return (
-    <div className="relative w-full h-screen overflow-hidden bg-black font-sans text-white">
-      {/* Camera Feed */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        className="absolute inset-0 w-full h-full object-cover opacity-60"
-      />
-
+    <div ref={containerRef} className="fixed inset-0 w-full h-screen overflow-hidden pointer-events-none select-none">
       {/* Three.js Canvas */}
-      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />
+      <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
       {/* UI Overlay */}
-      <div className="absolute inset-0 flex flex-col pointer-events-none">
+      <div className="absolute inset-0 flex flex-col z-10">
         {/* Header */}
         <div className="p-6 flex justify-between items-start pointer-events-auto">
           <div className="flex items-center gap-2 bg-black/40 backdrop-blur-md p-3 rounded-2xl border border-white/10">
@@ -303,17 +243,10 @@ export default function ARGame() {
               <Trophy className="w-5 h-5 text-white" />
             </div>
             <div>
-              <p className="text-[10px] uppercase tracking-widest text-white/60 font-bold">Current Quest</p>
+              <p className="text-[10px] uppercase tracking-widest text-white/60 font-bold">WebXR Quest</p>
               <p className="text-sm font-semibold">Find the Magic Ingredients</p>
             </div>
           </div>
-          
-          <button 
-            onClick={() => window.location.reload()}
-            className="p-3 bg-black/40 backdrop-blur-md rounded-2xl border border-white/10 hover:bg-white/10 transition-colors"
-          >
-            <RefreshCw className="w-5 h-5" />
-          </button>
         </div>
 
         {/* Center Content */}
@@ -327,33 +260,41 @@ export default function ARGame() {
                 className="bg-black/60 backdrop-blur-xl p-8 rounded-[2.5rem] border border-white/20 max-w-xs pointer-events-auto"
               >
                 <div className="w-20 h-20 bg-gradient-to-br from-red-400 to-red-600 rounded-3xl mx-auto mb-6 flex items-center justify-center shadow-2xl shadow-red-500/40 rotate-12">
-                  <MapPin className="w-10 h-10 text-white" />
+                  <Scan className="w-10 h-10 text-white" />
                 </div>
-                <h2 className="text-2xl font-bold mb-2">Ingredients Detected!</h2>
+                <h2 className="text-2xl font-bold mb-2">Real AR Mode</h2>
                 <p className="text-white/70 text-sm mb-8 leading-relaxed">
-                  The magic ingredients are nearby. Follow the path to collect them.
+                  Experience true spatial navigation. Please use a WebXR compatible mobile browser (Chrome on Android).
                 </p>
-                {needsPermission ? (
-                  <button
-                    onClick={requestPermissions}
-                    className="w-full py-4 bg-red-500 text-white font-bold rounded-2xl hover:bg-red-600 transition-all active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-red-500/40"
-                  >
-                    <Camera className="w-5 h-5" />
-                    Enable AR Sensors
-                  </button>
-                ) : (
-                  <button
-                    onClick={startHunt}
-                    className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-red-500 hover:text-white transition-all active:scale-95 flex items-center justify-center gap-2"
-                  >
-                    <Navigation className="w-5 h-5" />
-                    Start Navigation
-                  </button>
-                )}
+                <button
+                  onClick={startScanning}
+                  className="w-full py-4 bg-white text-black font-bold rounded-2xl hover:bg-red-500 hover:text-white transition-all active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <Navigation className="w-5 h-5" />
+                  Enter AR World
+                </button>
               </motion.div>
             )}
 
-            {gameState === GAME_STATES.HUNTING && (
+            {gameState === GAME_STATES.SCANNING && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-black/40 backdrop-blur-md p-6 rounded-3xl border border-white/10 max-w-xs"
+              >
+                <div className="flex items-center justify-center gap-3 mb-2">
+                  <motion.div
+                    animate={{ scale: [1, 1.2, 1] }}
+                    transition={{ repeat: Infinity, duration: 2 }}
+                    className="w-3 h-3 bg-white rounded-full"
+                  />
+                  <p className="text-sm font-bold uppercase tracking-widest">Scanning Ground</p>
+                </div>
+                <p className="text-xs text-white/60">Point your camera at a flat surface and tap to place the path.</p>
+              </motion.div>
+            )}
+
+            {gameState === GAME_STATES.PLACED && distance !== null && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -361,24 +302,19 @@ export default function ARGame() {
               >
                 <div className="bg-black/40 backdrop-blur-md p-6 rounded-3xl border border-white/10">
                   <div className="flex justify-between items-end mb-4">
-                    <p className="text-xs font-bold uppercase tracking-widest text-white/60">Remaining Distance</p>
-                    <p className="text-xl font-mono font-bold">{Math.max(0, Math.round((1 - progress) * 15))}m</p>
+                    <p className="text-xs font-bold uppercase tracking-widest text-white/60">Real Distance</p>
+                    <p className="text-xl font-mono font-bold">{distance.toFixed(1)}m</p>
                   </div>
                   <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
                     <motion.div 
                       className="h-full bg-red-500"
                       initial={{ width: 0 }}
-                      animate={{ width: `${progress * 100}%` }}
+                      animate={{ width: `${Math.max(0, Math.min(100, (1 - distance / PATH_LENGTH) * 100))}%` }}
                     />
                   </div>
-                  <div className="mt-4 flex items-center justify-center gap-2 text-[10px] text-white/40 font-bold uppercase tracking-widest">
-                    <motion.div
-                      animate={{ opacity: [0.2, 1, 0.2] }}
-                      transition={{ repeat: Infinity, duration: 1.5 }}
-                      className="w-1.5 h-1.5 bg-red-500 rounded-full"
-                    />
-                    Navigating to Destination...
-                  </div>
+                  <p className="mt-4 text-[10px] text-white/40 font-bold uppercase tracking-widest">
+                    Walk towards the tomato in the real world
+                  </p>
                 </div>
               </motion.div>
             )}
@@ -400,7 +336,6 @@ export default function ARGame() {
                 transition={{ type: 'spring', damping: 12 }}
                 className="bg-white text-black p-10 rounded-[3rem] text-center relative overflow-hidden max-w-sm"
               >
-                {/* Confetti-like background */}
                 <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-yellow-500 to-green-500" />
                 
                 <div className="mb-8 relative">
@@ -412,7 +347,6 @@ export default function ARGame() {
                     transition={{ repeat: Infinity, duration: 2 }}
                     className="w-32 h-32 mx-auto bg-red-50 flex items-center justify-center rounded-full"
                   >
-                    {/* 2D Tomato Icon */}
                     <div className="relative">
                       <div className="w-20 h-20 bg-red-500 rounded-full shadow-xl shadow-red-500/20" />
                       <div className="absolute -top-2 left-1/2 -translate-x-1/2 w-4 h-6 bg-green-600 rounded-full" />
@@ -420,18 +354,6 @@ export default function ARGame() {
                       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-10 h-2 bg-green-500 rounded-full -rotate-12" />
                     </div>
                   </motion.div>
-                  
-                  {/* Sparkles */}
-                  <motion.div 
-                    animate={{ opacity: [0, 1, 0], scale: [0.5, 1.5, 0.5] }}
-                    transition={{ repeat: Infinity, duration: 1.5 }}
-                    className="absolute top-0 right-4 w-4 h-4 bg-yellow-400 rounded-full"
-                  />
-                  <motion.div 
-                    animate={{ opacity: [0, 1, 0], scale: [0.5, 1.5, 0.5] }}
-                    transition={{ repeat: Infinity, duration: 1.5, delay: 0.5 }}
-                    className="absolute bottom-4 left-4 w-6 h-6 bg-blue-400 rounded-full"
-                  />
                 </div>
 
                 <h2 className="text-3xl font-black mb-4 uppercase tracking-tighter italic">Victory!</h2>
@@ -441,7 +363,7 @@ export default function ARGame() {
                 </p>
 
                 <button
-                  onClick={() => setGameState(GAME_STATES.START)}
+                  onClick={() => window.location.reload()}
                   className="w-full py-4 bg-black text-white font-bold rounded-2xl hover:bg-gray-800 transition-all active:scale-95"
                 >
                   Collect Ingredient
@@ -451,29 +373,18 @@ export default function ARGame() {
           )}
         </AnimatePresence>
 
-        {/* Error State */}
-        {cameraError && (
+        {/* Support Warning */}
+        {arSupported === false && (
           <div className="absolute inset-0 z-[100] bg-black flex items-center justify-center p-8 text-center pointer-events-auto">
             <div className="max-w-xs">
               <div className="w-16 h-16 bg-red-500/20 text-red-500 rounded-full mx-auto mb-6 flex items-center justify-center">
                 <X className="w-8 h-8" />
               </div>
-              <h3 className="text-xl font-bold mb-4">Camera Required</h3>
-              <p className="text-white/60 mb-8">{cameraError}</p>
-              <button 
-                onClick={() => window.location.reload()}
-                className="w-full py-4 bg-white text-black font-bold rounded-2xl"
-              >
-                Try Again
-              </button>
+              <h3 className="text-xl font-bold mb-4">WebXR Not Supported</h3>
+              <p className="text-white/60 mb-8">
+                Your browser or device does not support WebXR. Please use Google Chrome on an ARCore-compatible Android device.
+              </p>
             </div>
-          </div>
-        )}
-
-        {/* Orientation Warning */}
-        {!isOriented && gameState === GAME_STATES.HUNTING && (
-          <div className="absolute top-24 left-1/2 -translate-x-1/2 bg-yellow-500 text-black px-4 py-2 rounded-full text-[10px] font-bold uppercase tracking-widest animate-pulse">
-            Move your phone to look around
           </div>
         )}
       </div>
