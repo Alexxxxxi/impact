@@ -50,6 +50,10 @@ export default function ARGame() {
     tomatoSprite: THREE.Sprite;
     hudTexture: THREE.CanvasTexture;
     hudContext: CanvasRenderingContext2D;
+    hudSprite: THREE.Sprite;
+    successTexture: THREE.CanvasTexture;
+    successContext: CanvasRenderingContext2D;
+    successSprite: THREE.Sprite;
     pathGroup: THREE.Group;
     hitTestSource: XRHitTestSource | null;
     hitTestSourceRequested: boolean;
@@ -89,7 +93,7 @@ export default function ARGame() {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
-    scene.add(camera); // Add camera to scene to allow children (HUD)
+    scene.add(camera);
     
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
@@ -100,7 +104,7 @@ export default function ARGame() {
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.xr.enabled = true;
 
-    // --- 3D HUD Setup ---
+    // --- 3D HUD Setup (Shrinked) ---
     const hudCanvas = document.createElement('canvas');
     hudCanvas.width = 1024;
     hudCanvas.height = 256;
@@ -109,10 +113,25 @@ export default function ARGame() {
     const hudMat = new THREE.SpriteMaterial({ map: hudTexture, transparent: true, opacity: 0.9 });
     const hudSprite = new THREE.Sprite(hudMat);
     
-    // Position HUD in front of camera (bottom center) - High Res, Smaller Physical Size
-    hudSprite.scale.set(0.6, 0.15, 1);
-    hudSprite.position.set(0, -0.15, -0.5); 
+    // Position HUD at bottom center - Very Small
+    hudSprite.scale.set(0.25, 0.06, 1);
+    hudSprite.position.set(0, -0.25, -0.5); 
     camera.add(hudSprite);
+
+    // --- 3D Success Board Setup ---
+    const successCanvas = document.createElement('canvas');
+    successCanvas.width = 1024;
+    successCanvas.height = 1024;
+    const successContext = successCanvas.getContext('2d')!;
+    const successTexture = new THREE.CanvasTexture(successCanvas);
+    const successMat = new THREE.SpriteMaterial({ map: successTexture, transparent: true });
+    const successSprite = new THREE.Sprite(successMat);
+    
+    // Position in center of view
+    successSprite.position.set(0, 0, -1);
+    successSprite.scale.set(0.6, 0.6, 1);
+    successSprite.visible = false;
+    camera.add(successSprite);
 
     // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
@@ -196,7 +215,8 @@ export default function ARGame() {
 
     sceneRef.current = { 
       scene, camera, renderer, reticle, tomatoSprite, pathGroup, 
-      hudTexture, hudContext,
+      hudTexture, hudContext, hudSprite,
+      successTexture, successContext, successSprite,
       hitTestSource: null, hitTestSourceRequested: false,
     } as any;
 
@@ -236,7 +256,7 @@ export default function ARGame() {
     // Animation Loop
     renderer.setAnimationLoop((timestamp, frame) => {
       if (!sceneRef.current) return;
-      const { renderer, scene, camera, reticle, pathGroup, tomatoSprite, hudTexture, hudContext } = sceneRef.current;
+      const { renderer, scene, camera, reticle, pathGroup, tomatoSprite, hudTexture, hudContext, hudSprite, successTexture, successContext, successSprite } = sceneRef.current;
 
       if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
@@ -300,11 +320,49 @@ export default function ARGame() {
             if (finalTime > 40) grade = 'Perfect';
             else if (finalTime > 20) grade = 'Good';
             
-            // SAFE EXIT SEQUENCE for iOS WebXR Viewer
-            if (session) {
-              session.end().catch((err) => console.error("XR End Error:", err));
-            }
-            renderer.setAnimationLoop(null);
+            // 3D SUCCESS BOARD LOGIC
+            pathGroup.visible = false;
+            hudSprite.visible = false;
+            
+            // Draw Success Board
+            successContext.clearRect(0, 0, 1024, 1024);
+            successContext.fillStyle = 'rgba(0, 0, 0, 0.85)';
+            successContext.roundRect(50, 50, 924, 924, 100);
+            successContext.fill();
+            successContext.strokeStyle = 'white';
+            successContext.lineWidth = 10;
+            successContext.stroke();
+
+            // Victory Text
+            successContext.font = 'black italic 120px sans-serif';
+            successContext.fillStyle = '#facc15'; // yellow-400
+            successContext.textAlign = 'center';
+            successContext.fillText('VICTORY!', 512, 200);
+
+            // Draw Tomato in center
+            successContext.beginPath();
+            successContext.arc(512, 500, 180, 0, Math.PI * 2);
+            successContext.fillStyle = '#ff4444';
+            successContext.fill();
+            // Stem
+            successContext.fillStyle = '#228b22';
+            successContext.fillRect(500, 300, 24, 40);
+
+            // Info
+            successContext.font = 'bold 60px sans-serif';
+            successContext.fillStyle = 'white';
+            successContext.fillText('Ingredient Found: TOMATO', 512, 750);
+            
+            successContext.font = 'bold 80px sans-serif';
+            successContext.fillStyle = grade === 'Perfect' ? '#4ade80' : grade === 'Good' ? '#facc15' : '#f87171';
+            successContext.fillText(`Quality: ${grade}`, 512, 850);
+
+            successContext.font = 'bold 40px sans-serif';
+            successContext.fillStyle = 'rgba(255,255,255,0.4)';
+            successContext.fillText('Refresh page to play again', 512, 930);
+
+            successTexture.needsUpdate = true;
+            successSprite.visible = true;
 
             setQualityGrade(grade);
             setGameState(GAME_STATES.SUCCESS);
