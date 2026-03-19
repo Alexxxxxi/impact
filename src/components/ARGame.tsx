@@ -22,9 +22,15 @@ const GAME_STATES = {
 
 export default function ARGame() {
   const [gameState, setGameState] = useState(GAME_STATES.START);
+  const gameStateRef = useRef(gameState);
   const [distance, setDistance] = useState<number | null>(null);
   const [arSupported, setArSupported] = useState<boolean | null>(null);
   const [isHitTestReady, setIsHitTestReady] = useState(false);
+
+  // Sync ref with state
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -141,13 +147,18 @@ export default function ARGame() {
     });
     document.body.appendChild(arButton);
 
+    // Auto-transition to SCANNING when session starts (fixes iOS Overlay issues)
+    renderer.xr.addEventListener('sessionstart', () => {
+      setGameState(GAME_STATES.SCANNING);
+    });
+
     // Controller for interaction
     const controller = renderer.xr.getController(0);
     controller.addEventListener('select', onSelect);
     scene.add(controller);
 
     function onSelect() {
-      if (sceneRef.current && sceneRef.current.reticle.visible && gameState === GAME_STATES.SCANNING) {
+      if (sceneRef.current && sceneRef.current.reticle.visible && gameStateRef.current === GAME_STATES.SCANNING) {
         const { reticle, pathGroup } = sceneRef.current;
         
         // Anchor the path to the reticle position
@@ -187,7 +198,7 @@ export default function ARGame() {
 
         if (sceneRef.current.hitTestSource) {
           const hitTestResults = frame.getHitTestResults(sceneRef.current.hitTestSource);
-          if (hitTestResults.length > 0 && gameState === GAME_STATES.SCANNING) {
+          if (hitTestResults.length > 0 && gameStateRef.current === GAME_STATES.SCANNING) {
             const hit = hitTestResults[0];
             reticle.visible = true;
             reticle.matrix.fromArray(hit.getPose(referenceSpace!)!.transform.matrix);
@@ -197,7 +208,7 @@ export default function ARGame() {
         }
 
         // Real-time distance calculation
-        if (gameState === GAME_STATES.PLACED) {
+        if (gameStateRef.current === GAME_STATES.PLACED) {
           const camPos = new THREE.Vector3();
           camera.getWorldPosition(camPos);
           
@@ -223,7 +234,7 @@ export default function ARGame() {
       if (arButton.parentNode) arButton.parentNode.removeChild(arButton);
       renderer.dispose();
     };
-  }, [gameState]);
+  }, []);
 
   const startScanning = () => {
     setGameState(GAME_STATES.SCANNING);
