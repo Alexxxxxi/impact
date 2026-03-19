@@ -1,0 +1,5 @@
+{
+  "name": "AR Tomato Treasure Hunt",
+  "description": "A mobile AR treasure hunt game where you follow a path to find a virtual tomato prize.",
+  "requestFramePermissions": ["camera"]
+}
