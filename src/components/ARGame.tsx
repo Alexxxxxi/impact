@@ -13,6 +13,7 @@ function cn(...inputs: ClassValue[]) {
 // --- Constants ---
 const PATH_LENGTH = 10; // 10 meters path
 const DOT_SPACING = 1.0;
+const GAME_TIME_LIMIT = 60; // 60 seconds
 const GAME_STATES = {
   START: 'START',
   SCANNING: 'SCANNING',
@@ -24,13 +25,20 @@ export default function ARGame() {
   const [gameState, setGameState] = useState(GAME_STATES.START);
   const gameStateRef = useRef(gameState);
   const [distance, setDistance] = useState<number | null>(null);
+  const [timeLeft, setTimeLeft] = useState(GAME_TIME_LIMIT);
+  const timeLeftRef = useRef(timeLeft);
+  const [qualityGrade, setQualityGrade] = useState<string>('');
   const [arSupported, setArSupported] = useState<boolean | null>(null);
   const [isHitTestReady, setIsHitTestReady] = useState(false);
 
-  // Sync ref with state
+  // Sync refs with state
   useEffect(() => {
     gameStateRef.current = gameState;
   }, [gameState]);
+
+  useEffect(() => {
+    timeLeftRef.current = timeLeft;
+  }, [timeLeft]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,11 +47,28 @@ export default function ARGame() {
     camera: THREE.PerspectiveCamera;
     renderer: THREE.WebGLRenderer;
     reticle: THREE.Mesh;
-    tomato: THREE.Group;
+    tomatoSprite: THREE.Sprite;
     pathGroup: THREE.Group;
     hitTestSource: XRHitTestSource | null;
     hitTestSourceRequested: boolean;
   } | null>(null);
+
+  // --- Timer Logic ---
+  useEffect(() => {
+    let timer: NodeJS.Timeout;
+    if (gameState === GAME_STATES.PLACED) {
+      timer = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 0) {
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [gameState]);
 
   // --- WebXR Support Check ---
   useEffect(() => {
@@ -110,21 +135,45 @@ export default function ARGame() {
       }
     }
 
-    // Tomato
-    const tomato = new THREE.Group();
-    const bodyGeo = new THREE.SphereGeometry(0.25, 32, 32);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xff4444, roughness: 0.3 });
-    const body = new THREE.Mesh(bodyGeo, bodyMat);
-    tomato.add(body);
+    // 2D Illustration Tomato (Sprite)
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      // Draw Tomato Body
+      ctx.beginPath();
+      ctx.arc(128, 140, 100, 0, Math.PI * 2);
+      ctx.fillStyle = '#ff4444';
+      ctx.fill();
+      ctx.strokeStyle = '#8b0000';
+      ctx.lineWidth = 8;
+      ctx.stroke();
 
-    const stemGeo = new THREE.CylinderGeometry(0.02, 0.02, 0.1, 8);
-    const stemMat = new THREE.MeshStandardMaterial({ color: 0x228b22 });
-    const stem = new THREE.Mesh(stemGeo, stemMat);
-    stem.position.y = 0.25;
-    tomato.add(stem);
+      // Draw Stem
+      ctx.beginPath();
+      ctx.moveTo(128, 40);
+      ctx.lineTo(128, 10);
+      ctx.strokeStyle = '#228b22';
+      ctx.lineWidth = 12;
+      ctx.lineCap = 'round';
+      ctx.stroke();
 
-    tomato.position.set(0, 0.3, -PATH_LENGTH * DOT_SPACING);
-    pathGroup.add(tomato);
+      // Draw Leaves
+      ctx.beginPath();
+      ctx.ellipse(128, 50, 40, 15, 0, 0, Math.PI * 2);
+      ctx.ellipse(128, 50, 40, 15, Math.PI / 3, 0, Math.PI * 2);
+      ctx.ellipse(128, 50, 40, 15, -Math.PI / 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#228b22';
+      ctx.fill();
+    }
+
+    const tomatoTexture = new THREE.CanvasTexture(canvas);
+    const tomatoMat = new THREE.SpriteMaterial({ map: tomatoTexture });
+    const tomatoSprite = new THREE.Sprite(tomatoMat);
+    tomatoSprite.scale.set(0.5, 0.5, 1);
+    tomatoSprite.position.set(0, 0.4, -PATH_LENGTH * DOT_SPACING);
+    pathGroup.add(tomatoSprite);
 
     // Final Box
     const boxGeo = new THREE.BoxGeometry(0.8, 0.05, 0.8);
@@ -134,9 +183,8 @@ export default function ARGame() {
     pathGroup.add(box);
 
     sceneRef.current = { 
-      scene, camera, renderer, reticle, tomato, pathGroup, 
+      scene, camera, renderer, reticle, tomatoSprite, pathGroup, 
       hitTestSource: null, hitTestSourceRequested: false,
-      box
     } as any;
 
     // WebXR Button
@@ -180,7 +228,7 @@ export default function ARGame() {
     // Animation Loop
     renderer.setAnimationLoop((timestamp, frame) => {
       if (!sceneRef.current) return;
-      const { renderer, scene, camera, reticle, pathGroup, tomato } = sceneRef.current;
+      const { renderer, scene, camera, reticle, pathGroup, tomatoSprite } = sceneRef.current;
 
       if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
@@ -213,19 +261,28 @@ export default function ARGame() {
           camera.getWorldPosition(camPos);
           
           const tomatoPos = new THREE.Vector3();
-          tomato.getWorldPosition(tomatoPos);
+          tomatoSprite.getWorldPosition(tomatoPos);
           
           const dist = camPos.distanceTo(tomatoPos);
           setDistance(dist);
 
-          // Success trigger
-          if (dist < 0.6) {
+          // Dynamic Scaling based on time
+          const scaleFactor = 0.5 * (timeLeftRef.current / GAME_TIME_LIMIT);
+          tomatoSprite.scale.set(scaleFactor, scaleFactor, 1);
+
+          // Success trigger (Updated threshold to 1.5m)
+          if (dist < 1.5) {
+            const finalTime = timeLeftRef.current;
+            let grade = 'Bad';
+            if (finalTime > 40) grade = 'Perfect';
+            else if (finalTime > 20) grade = 'Good';
+            
+            setQualityGrade(grade);
             setGameState(GAME_STATES.SUCCESS);
           }
         }
       }
 
-      tomato.rotation.y += 0.02;
       renderer.render(scene, camera);
     });
 
@@ -309,22 +366,37 @@ export default function ARGame() {
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="absolute bottom-32 w-full px-12 pointer-events-auto"
+                className="absolute bottom-32 w-full px-6 pointer-events-auto"
               >
-                <div className="bg-black/40 backdrop-blur-md p-6 rounded-3xl border border-white/10">
-                  <div className="flex justify-between items-end mb-4">
-                    <p className="text-xs font-bold uppercase tracking-widest text-white/60">Real Distance</p>
-                    <p className="text-xl font-mono font-bold">{distance.toFixed(1)}m</p>
+                <div className="bg-black/60 backdrop-blur-xl p-6 rounded-[2rem] border border-white/20 shadow-2xl">
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div className="text-left">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-white/40 mb-1">Real Distance</p>
+                      <p className="text-3xl font-black italic tracking-tighter text-red-500">
+                        {distance.toFixed(1)}<span className="text-sm not-italic ml-1">m</span>
+                      </p>
+                    </div>
+                    <div className="text-right border-l border-white/10 pl-4">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-white/40 mb-1">Time Left</p>
+                      <p className={cn(
+                        "text-3xl font-black italic tracking-tighter",
+                        timeLeft < 10 ? "text-red-500 animate-pulse" : "text-white"
+                      )}>
+                        00:{timeLeft.toString().padStart(2, '0')}
+                      </p>
+                    </div>
                   </div>
-                  <div className="h-2 w-full bg-white/10 rounded-full overflow-hidden">
+                  
+                  <div className="h-1.5 w-full bg-white/10 rounded-full overflow-hidden">
                     <motion.div 
-                      className="h-full bg-red-500"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.max(0, Math.min(100, (1 - distance / PATH_LENGTH) * 100))}%` }}
+                      className="h-full bg-gradient-to-r from-red-600 to-red-400"
+                      initial={{ width: "100%" }}
+                      animate={{ width: `${(timeLeft / GAME_TIME_LIMIT) * 100}%` }}
                     />
                   </div>
-                  <p className="mt-4 text-[10px] text-white/40 font-bold uppercase tracking-widest">
-                    Walk towards the tomato in the real world
+                  
+                  <p className="mt-4 text-[10px] text-white/30 font-bold uppercase tracking-[0.2em] text-center">
+                    Hurry! The tomato is shrinking...
                   </p>
                 </div>
               </motion.div>
@@ -339,13 +411,13 @@ export default function ARGame() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/80 backdrop-blur-sm pointer-events-auto"
+              className="absolute inset-0 z-50 flex items-center justify-center p-6 bg-black/90 backdrop-blur-md pointer-events-auto"
             >
               <motion.div
                 initial={{ scale: 0.5, y: 100, rotate: -10 }}
                 animate={{ scale: 1, y: 0, rotate: 0 }}
                 transition={{ type: 'spring', damping: 12 }}
-                className="bg-white text-black p-10 rounded-[3rem] text-center relative overflow-hidden max-w-sm"
+                className="bg-white text-black p-10 rounded-[3rem] text-center relative overflow-hidden max-w-sm shadow-[0_0_50px_rgba(255,255,255,0.2)]"
               >
                 <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-yellow-500 to-green-500" />
                 
@@ -367,15 +439,22 @@ export default function ARGame() {
                   </motion.div>
                 </div>
 
-                <h2 className="text-3xl font-black mb-4 uppercase tracking-tighter italic">Victory!</h2>
-                <p className="text-gray-600 font-medium mb-8 leading-relaxed">
-                  Congratulations! You have successfully discovered a fresh ingredient:
-                  <span className="block text-2xl text-red-600 font-black mt-2">TOMATO</span>
-                </p>
+                <h2 className="text-3xl font-black mb-2 uppercase tracking-tighter italic">Victory!</h2>
+                <div className="mb-8">
+                  <p className="text-gray-400 text-[10px] font-black uppercase tracking-widest mb-1">Ingredient Found</p>
+                  <p className="text-3xl text-red-600 font-black tracking-tighter">TOMATO</p>
+                  <p className={cn(
+                    "text-sm font-bold mt-2 px-4 py-1 rounded-full inline-block",
+                    qualityGrade === 'Perfect' ? "bg-green-100 text-green-700" :
+                    qualityGrade === 'Good' ? "bg-yellow-100 text-yellow-700" : "bg-red-100 text-red-700"
+                  )}>
+                    Quality: {qualityGrade}
+                  </p>
+                </div>
 
                 <button
                   onClick={() => window.location.reload()}
-                  className="w-full py-4 bg-black text-white font-bold rounded-2xl hover:bg-gray-800 transition-all active:scale-95"
+                  className="w-full py-4 bg-black text-white font-bold rounded-2xl hover:bg-gray-800 transition-all active:scale-95 shadow-xl"
                 >
                   Collect Ingredient
                 </button>
