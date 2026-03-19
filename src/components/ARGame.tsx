@@ -104,6 +104,12 @@ export default function ARGame() {
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.xr.enabled = true;
 
+    // --- Texture Loader ---
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.setCrossOrigin('anonymous');
+    const tomatoTexture = textureLoader.load('https://impact-1394762829.cos.ap-guangzhou.myqcloud.com/tomato.png');
+    const logoTexture = textureLoader.load('https://impact-1394762829.cos.ap-guangzhou.myqcloud.com/logo.png');
+
     // --- 3D HUD Setup (Shrinked) ---
     const hudCanvas = document.createElement('canvas');
     hudCanvas.width = 1024;
@@ -171,35 +177,15 @@ export default function ARGame() {
       }
     }
 
-    // 2D Illustration Tomato (Sprite)
-    const tomatoCanvas = document.createElement('canvas');
-    tomatoCanvas.width = 256;
-    tomatoCanvas.height = 256;
-    const tCtx = tomatoCanvas.getContext('2d');
-    if (tCtx) {
-      tCtx.beginPath();
-      tCtx.arc(128, 140, 100, 0, Math.PI * 2);
-      tCtx.fillStyle = '#ff4444';
-      tCtx.fill();
-      tCtx.strokeStyle = '#8b0000';
-      tCtx.lineWidth = 8;
-      tCtx.stroke();
-      tCtx.beginPath();
-      tCtx.moveTo(128, 40);
-      tCtx.lineTo(128, 10);
-      tCtx.strokeStyle = '#228b22';
-      tCtx.lineWidth = 12;
-      tCtx.lineCap = 'round';
-      tCtx.stroke();
-      tCtx.beginPath();
-      tCtx.ellipse(128, 50, 40, 15, 0, 0, Math.PI * 2);
-      tCtx.ellipse(128, 50, 40, 15, Math.PI / 3, 0, Math.PI * 2);
-      tCtx.ellipse(128, 50, 40, 15, -Math.PI / 3, 0, Math.PI * 2);
-      tCtx.fillStyle = '#228b22';
-      tCtx.fill();
-    }
+    // Start Logo Plane
+    const logoGeo = new THREE.PlaneGeometry(0.6, 0.6);
+    const logoMat = new THREE.MeshBasicMaterial({ map: logoTexture, transparent: true });
+    const logoMesh = new THREE.Mesh(logoGeo, logoMat);
+    logoMesh.rotation.x = -Math.PI / 2;
+    logoMesh.position.set(0, 0.01, 0);
+    pathGroup.add(logoMesh);
 
-    const tomatoTexture = new THREE.CanvasTexture(tomatoCanvas);
+    // 3D Tomato (Sprite)
     const tomatoMat = new THREE.SpriteMaterial({ map: tomatoTexture });
     const tomatoSprite = new THREE.Sprite(tomatoMat);
     tomatoSprite.scale.set(0.5, 0.5, 1);
@@ -339,14 +325,10 @@ export default function ARGame() {
             successContext.textAlign = 'center';
             successContext.fillText('VICTORY!', 512, 200);
 
-            // Draw Tomato in center
-            successContext.beginPath();
-            successContext.arc(512, 500, 180, 0, Math.PI * 2);
-            successContext.fillStyle = '#ff4444';
-            successContext.fill();
-            // Stem
-            successContext.fillStyle = '#228b22';
-            successContext.fillRect(500, 300, 24, 40);
+            // Draw Tomato Image in center
+            if (tomatoTexture.image) {
+              successContext.drawImage(tomatoTexture.image, 384, 320, 256, 256);
+            }
 
             // Info
             successContext.font = 'bold 60px sans-serif';
