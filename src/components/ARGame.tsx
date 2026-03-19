@@ -319,7 +319,7 @@ export default function ARGame() {
             img.src = 'https://impact-1394762829.cos.ap-guangzhou.myqcloud.com/tomato.png';
             
             img.onload = () => {
-              // Draw Success Board
+              // 1. 清空并画背景
               successContext.clearRect(0, 0, 1024, 1024);
               successContext.fillStyle = 'rgba(0, 0, 0, 0.85)';
               successContext.roundRect(50, 50, 924, 924, 100);
@@ -328,28 +328,30 @@ export default function ARGame() {
               successContext.lineWidth = 10;
               successContext.stroke();
 
-              // Victory Text
+              // 2. 画顶部标题 (Y: 200)
               successContext.font = 'black italic 120px sans-serif';
-              successContext.fillStyle = '#facc15'; // yellow-400
+              successContext.fillStyle = '#facc15';
               successContext.textAlign = 'center';
               successContext.fillText('VICTORY!', 512, 200);
 
-              // Draw Tomato Image in center
-              successContext.drawImage(img, 384, 400, 256, 256);
-
-              // Info
-              successContext.font = 'bold 60px sans-serif';
+              // 3. 画底部信息文字 (Y: 680 开始往下排)
+              successContext.font = 'bold 50px sans-serif';
               successContext.fillStyle = 'white';
-              successContext.fillText('Ingredient Found: TOMATO', 512, 750);
+              successContext.fillText('Ingredient Found: TOMATO', 512, 680);
               
               successContext.font = 'bold 80px sans-serif';
               successContext.fillStyle = grade === 'Perfect' ? '#4ade80' : grade === 'Good' ? '#facc15' : '#f87171';
-              successContext.fillText(`Quality: ${grade}`, 512, 850);
+              successContext.fillText(`Quality: ${grade}`, 512, 780);
 
               successContext.font = 'bold 40px sans-serif';
               successContext.fillStyle = 'rgba(255,255,255,0.4)';
-              successContext.fillText('Refresh page to play again', 512, 930);
+              successContext.fillText('Refresh page to play again', 512, 880);
 
+              // 4. 画中间的图片 (Y: 280 开始，高度 300)
+              // 保证居中: x = 512 - 150 = 362
+              successContext.drawImage(img, 362, 280, 300, 300);
+
+              // 5. 通知更新并显示
               successTexture.needsUpdate = true;
               successSprite.visible = true;
 
