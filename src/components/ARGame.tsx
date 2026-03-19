@@ -48,6 +48,8 @@ export default function ARGame() {
     renderer: THREE.WebGLRenderer;
     reticle: THREE.Mesh;
     tomatoSprite: THREE.Sprite;
+    hudTexture: THREE.CanvasTexture;
+    hudContext: CanvasRenderingContext2D;
     pathGroup: THREE.Group;
     hitTestSource: XRHitTestSource | null;
     hitTestSourceRequested: boolean;
@@ -87,6 +89,7 @@ export default function ARGame() {
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20);
+    scene.add(camera); // Add camera to scene to allow children (HUD)
     
     const renderer = new THREE.WebGLRenderer({
       canvas: canvasRef.current,
@@ -96,6 +99,20 @@ export default function ARGame() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.xr.enabled = true;
+
+    // --- 3D HUD Setup ---
+    const hudCanvas = document.createElement('canvas');
+    hudCanvas.width = 512;
+    hudCanvas.height = 256;
+    const hudContext = hudCanvas.getContext('2d')!;
+    const hudTexture = new THREE.CanvasTexture(hudCanvas);
+    const hudMat = new THREE.SpriteMaterial({ map: hudTexture, transparent: true, opacity: 0.9 });
+    const hudSprite = new THREE.Sprite(hudMat);
+    
+    // Position HUD in front of camera (bottom center)
+    hudSprite.scale.set(0.4, 0.2, 1);
+    hudSprite.position.set(0, -0.2, -0.6); 
+    camera.add(hudSprite);
 
     // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
@@ -136,39 +153,34 @@ export default function ARGame() {
     }
 
     // 2D Illustration Tomato (Sprite)
-    const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 256;
-    const ctx = canvas.getContext('2d');
-    if (ctx) {
-      // Draw Tomato Body
-      ctx.beginPath();
-      ctx.arc(128, 140, 100, 0, Math.PI * 2);
-      ctx.fillStyle = '#ff4444';
-      ctx.fill();
-      ctx.strokeStyle = '#8b0000';
-      ctx.lineWidth = 8;
-      ctx.stroke();
-
-      // Draw Stem
-      ctx.beginPath();
-      ctx.moveTo(128, 40);
-      ctx.lineTo(128, 10);
-      ctx.strokeStyle = '#228b22';
-      ctx.lineWidth = 12;
-      ctx.lineCap = 'round';
-      ctx.stroke();
-
-      // Draw Leaves
-      ctx.beginPath();
-      ctx.ellipse(128, 50, 40, 15, 0, 0, Math.PI * 2);
-      ctx.ellipse(128, 50, 40, 15, Math.PI / 3, 0, Math.PI * 2);
-      ctx.ellipse(128, 50, 40, 15, -Math.PI / 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#228b22';
-      ctx.fill();
+    const tomatoCanvas = document.createElement('canvas');
+    tomatoCanvas.width = 256;
+    tomatoCanvas.height = 256;
+    const tCtx = tomatoCanvas.getContext('2d');
+    if (tCtx) {
+      tCtx.beginPath();
+      tCtx.arc(128, 140, 100, 0, Math.PI * 2);
+      tCtx.fillStyle = '#ff4444';
+      tCtx.fill();
+      tCtx.strokeStyle = '#8b0000';
+      tCtx.lineWidth = 8;
+      tCtx.stroke();
+      tCtx.beginPath();
+      tCtx.moveTo(128, 40);
+      tCtx.lineTo(128, 10);
+      tCtx.strokeStyle = '#228b22';
+      tCtx.lineWidth = 12;
+      tCtx.lineCap = 'round';
+      tCtx.stroke();
+      tCtx.beginPath();
+      tCtx.ellipse(128, 50, 40, 15, 0, 0, Math.PI * 2);
+      tCtx.ellipse(128, 50, 40, 15, Math.PI / 3, 0, Math.PI * 2);
+      tCtx.ellipse(128, 50, 40, 15, -Math.PI / 3, 0, Math.PI * 2);
+      tCtx.fillStyle = '#228b22';
+      tCtx.fill();
     }
 
-    const tomatoTexture = new THREE.CanvasTexture(canvas);
+    const tomatoTexture = new THREE.CanvasTexture(tomatoCanvas);
     const tomatoMat = new THREE.SpriteMaterial({ map: tomatoTexture });
     const tomatoSprite = new THREE.Sprite(tomatoMat);
     tomatoSprite.scale.set(0.5, 0.5, 1);
@@ -184,6 +196,7 @@ export default function ARGame() {
 
     sceneRef.current = { 
       scene, camera, renderer, reticle, tomatoSprite, pathGroup, 
+      hudTexture, hudContext,
       hitTestSource: null, hitTestSourceRequested: false,
     } as any;
 
@@ -195,7 +208,7 @@ export default function ARGame() {
     });
     document.body.appendChild(arButton);
 
-    // Auto-transition to SCANNING when session starts (fixes iOS Overlay issues)
+    // Auto-transition to SCANNING when session starts
     renderer.xr.addEventListener('sessionstart', () => {
       setGameState(GAME_STATES.SCANNING);
     });
@@ -208,17 +221,12 @@ export default function ARGame() {
     function onSelect() {
       if (sceneRef.current && sceneRef.current.reticle.visible && gameStateRef.current === GAME_STATES.SCANNING) {
         const { reticle, pathGroup } = sceneRef.current;
-        
-        // Anchor the path to the reticle position
         pathGroup.position.setFromMatrixPosition(reticle.matrix);
-        
-        // Orient path towards the camera but keep it flat on ground
         const camPos = new THREE.Vector3();
         camera.getWorldPosition(camPos);
         const lookPos = new THREE.Vector3(camPos.x, pathGroup.position.y, camPos.z);
         pathGroup.lookAt(lookPos);
-        pathGroup.rotateY(Math.PI); // Flip to face away from camera (forward)
-        
+        pathGroup.rotateY(Math.PI);
         pathGroup.visible = true;
         reticle.visible = false;
         setGameState(GAME_STATES.PLACED);
@@ -228,7 +236,7 @@ export default function ARGame() {
     // Animation Loop
     renderer.setAnimationLoop((timestamp, frame) => {
       if (!sceneRef.current) return;
-      const { renderer, scene, camera, reticle, pathGroup, tomatoSprite } = sceneRef.current;
+      const { renderer, scene, camera, reticle, pathGroup, tomatoSprite, hudTexture, hudContext } = sceneRef.current;
 
       if (frame) {
         const referenceSpace = renderer.xr.getReferenceSpace();
@@ -255,18 +263,33 @@ export default function ARGame() {
           }
         }
 
-        // Real-time distance calculation
+        // Real-time distance calculation & HUD update
         if (gameStateRef.current === GAME_STATES.PLACED) {
           const camPos = new THREE.Vector3();
           camera.getWorldPosition(camPos);
-          
           const tomatoPos = new THREE.Vector3();
           tomatoSprite.getWorldPosition(tomatoPos);
-          
           const dist = camPos.distanceTo(tomatoPos);
           setDistance(dist);
 
-          // Dynamic Scaling based on time
+          // Update 3D HUD
+          hudContext.clearRect(0, 0, 512, 256);
+          hudContext.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          hudContext.roundRect(10, 10, 492, 236, 40);
+          hudContext.fill();
+          
+          hudContext.font = 'bold 48px sans-serif';
+          hudContext.fillStyle = '#ff4444';
+          hudContext.textAlign = 'center';
+          hudContext.fillText(`Distance: ${dist.toFixed(1)}m`, 256, 100);
+          
+          hudContext.font = 'bold 40px sans-serif';
+          hudContext.fillStyle = 'white';
+          hudContext.fillText(`Time: 00:${timeLeftRef.current.toString().padStart(2, '0')}s`, 256, 180);
+          
+          hudTexture.needsUpdate = true;
+
+          // Dynamic Scaling
           const scaleFactor = 0.5 * (timeLeftRef.current / GAME_TIME_LIMIT);
           tomatoSprite.scale.set(scaleFactor, scaleFactor, 1);
 
@@ -279,6 +302,11 @@ export default function ARGame() {
             
             setQualityGrade(grade);
             setGameState(GAME_STATES.SUCCESS);
+            
+            // FORCE EXIT AR SESSION to show React UI
+            if (session) {
+              session.end();
+            }
           }
         }
       }
