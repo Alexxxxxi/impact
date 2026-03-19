@@ -102,16 +102,16 @@ export default function ARGame() {
 
     // --- 3D HUD Setup ---
     const hudCanvas = document.createElement('canvas');
-    hudCanvas.width = 512;
+    hudCanvas.width = 1024;
     hudCanvas.height = 256;
     const hudContext = hudCanvas.getContext('2d')!;
     const hudTexture = new THREE.CanvasTexture(hudCanvas);
     const hudMat = new THREE.SpriteMaterial({ map: hudTexture, transparent: true, opacity: 0.9 });
     const hudSprite = new THREE.Sprite(hudMat);
     
-    // Position HUD in front of camera (bottom center)
-    hudSprite.scale.set(0.4, 0.2, 1);
-    hudSprite.position.set(0, -0.2, -0.6); 
+    // Position HUD in front of camera (bottom center) - High Res, Smaller Physical Size
+    hudSprite.scale.set(0.6, 0.15, 1);
+    hudSprite.position.set(0, -0.15, -0.5); 
     camera.add(hudSprite);
 
     // Lights
@@ -272,20 +272,20 @@ export default function ARGame() {
           const dist = camPos.distanceTo(tomatoPos);
           setDistance(dist);
 
-          // Update 3D HUD
-          hudContext.clearRect(0, 0, 512, 256);
-          hudContext.fillStyle = 'rgba(0, 0, 0, 0.6)';
-          hudContext.roundRect(10, 10, 492, 236, 40);
+          // Update 3D HUD - High Resolution Text
+          hudContext.clearRect(0, 0, 1024, 256);
+          hudContext.fillStyle = 'rgba(0, 0, 0, 0.7)';
+          hudContext.roundRect(20, 20, 984, 216, 60);
           hudContext.fill();
           
-          hudContext.font = 'bold 48px sans-serif';
+          hudContext.font = 'bold 80px sans-serif';
           hudContext.fillStyle = '#ff4444';
           hudContext.textAlign = 'center';
-          hudContext.fillText(`Distance: ${dist.toFixed(1)}m`, 256, 100);
+          hudContext.fillText(`Distance: ${dist.toFixed(1)}m`, 512, 110);
           
-          hudContext.font = 'bold 40px sans-serif';
+          hudContext.font = 'bold 60px sans-serif';
           hudContext.fillStyle = 'white';
-          hudContext.fillText(`Time: 00:${timeLeftRef.current.toString().padStart(2, '0')}s`, 256, 180);
+          hudContext.fillText(`Time: 00:${timeLeftRef.current.toString().padStart(2, '0')}s`, 512, 200);
           
           hudTexture.needsUpdate = true;
 
@@ -300,13 +300,14 @@ export default function ARGame() {
             if (finalTime > 40) grade = 'Perfect';
             else if (finalTime > 20) grade = 'Good';
             
+            // SAFE EXIT SEQUENCE for iOS WebXR Viewer
+            if (session) {
+              session.end().catch((err) => console.error("XR End Error:", err));
+            }
+            renderer.setAnimationLoop(null);
+
             setQualityGrade(grade);
             setGameState(GAME_STATES.SUCCESS);
-            
-            // FORCE EXIT AR SESSION to show React UI
-            if (session) {
-              session.end();
-            }
           }
         }
       }
@@ -326,7 +327,10 @@ export default function ARGame() {
   };
 
   return (
-    <div ref={containerRef} className="fixed inset-0 w-full h-screen overflow-hidden pointer-events-none select-none">
+    <div ref={containerRef} className={cn(
+      "fixed inset-0 w-full h-screen overflow-hidden pointer-events-none select-none",
+      gameState === GAME_STATES.SUCCESS ? "bg-black" : "bg-transparent"
+    )}>
       {/* Three.js Canvas */}
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
 
