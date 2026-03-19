@@ -179,7 +179,11 @@ export default function ARGame() {
 
     // Start Logo Plane
     const logoGeo = new THREE.PlaneGeometry(0.6, 0.6);
-    const logoMat = new THREE.MeshBasicMaterial({ map: logoTexture, transparent: true });
+    const logoMat = new THREE.MeshBasicMaterial({ 
+      map: logoTexture, 
+      transparent: true, 
+      alphaTest: 0.05 
+    });
     const logoMesh = new THREE.Mesh(logoGeo, logoMat);
     logoMesh.rotation.x = -Math.PI / 2;
     logoMesh.position.set(0, 0.01, 0);
@@ -306,48 +310,70 @@ export default function ARGame() {
             if (finalTime > 40) grade = 'Perfect';
             else if (finalTime > 20) grade = 'Good';
             
-            // 3D SUCCESS BOARD LOGIC
+            // 3D SUCCESS BOARD LOGIC - Async Image Loading to prevent transparency bug
             pathGroup.visible = false;
             hudSprite.visible = false;
+
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.src = 'https://impact-1394762829.cos.ap-guangzhou.myqcloud.com/tomato.png';
             
-            // Draw Success Board
-            successContext.clearRect(0, 0, 1024, 1024);
-            successContext.fillStyle = 'rgba(0, 0, 0, 0.85)';
-            successContext.roundRect(50, 50, 924, 924, 100);
-            successContext.fill();
-            successContext.strokeStyle = 'white';
-            successContext.lineWidth = 10;
-            successContext.stroke();
+            img.onload = () => {
+              // Draw Success Board
+              successContext.clearRect(0, 0, 1024, 1024);
+              successContext.fillStyle = 'rgba(0, 0, 0, 0.85)';
+              successContext.roundRect(50, 50, 924, 924, 100);
+              successContext.fill();
+              successContext.strokeStyle = 'white';
+              successContext.lineWidth = 10;
+              successContext.stroke();
 
-            // Victory Text
-            successContext.font = 'black italic 120px sans-serif';
-            successContext.fillStyle = '#facc15'; // yellow-400
-            successContext.textAlign = 'center';
-            successContext.fillText('VICTORY!', 512, 200);
+              // Victory Text
+              successContext.font = 'black italic 120px sans-serif';
+              successContext.fillStyle = '#facc15'; // yellow-400
+              successContext.textAlign = 'center';
+              successContext.fillText('VICTORY!', 512, 200);
 
-            // Draw Tomato Image in center
-            if (tomatoTexture.image) {
-              successContext.drawImage(tomatoTexture.image, 384, 320, 256, 256);
-            }
+              // Draw Tomato Image in center
+              successContext.drawImage(img, 384, 400, 256, 256);
 
-            // Info
-            successContext.font = 'bold 60px sans-serif';
-            successContext.fillStyle = 'white';
-            successContext.fillText('Ingredient Found: TOMATO', 512, 750);
-            
-            successContext.font = 'bold 80px sans-serif';
-            successContext.fillStyle = grade === 'Perfect' ? '#4ade80' : grade === 'Good' ? '#facc15' : '#f87171';
-            successContext.fillText(`Quality: ${grade}`, 512, 850);
+              // Info
+              successContext.font = 'bold 60px sans-serif';
+              successContext.fillStyle = 'white';
+              successContext.fillText('Ingredient Found: TOMATO', 512, 750);
+              
+              successContext.font = 'bold 80px sans-serif';
+              successContext.fillStyle = grade === 'Perfect' ? '#4ade80' : grade === 'Good' ? '#facc15' : '#f87171';
+              successContext.fillText(`Quality: ${grade}`, 512, 850);
 
-            successContext.font = 'bold 40px sans-serif';
-            successContext.fillStyle = 'rgba(255,255,255,0.4)';
-            successContext.fillText('Refresh page to play again', 512, 930);
+              successContext.font = 'bold 40px sans-serif';
+              successContext.fillStyle = 'rgba(255,255,255,0.4)';
+              successContext.fillText('Refresh page to play again', 512, 930);
 
-            successTexture.needsUpdate = true;
-            successSprite.visible = true;
+              successTexture.needsUpdate = true;
+              successSprite.visible = true;
 
-            setQualityGrade(grade);
-            setGameState(GAME_STATES.SUCCESS);
+              setQualityGrade(grade);
+              setGameState(GAME_STATES.SUCCESS);
+            };
+
+            img.onerror = () => {
+              console.error("Failed to load success image");
+              // Fallback: Draw without image
+              successContext.clearRect(0, 0, 1024, 1024);
+              successContext.fillStyle = 'rgba(0, 0, 0, 0.85)';
+              successContext.roundRect(50, 50, 924, 924, 100);
+              successContext.fill();
+              successContext.font = 'bold 80px sans-serif';
+              successContext.fillStyle = 'white';
+              successContext.textAlign = 'center';
+              successContext.fillText('VICTORY!', 512, 512);
+              successTexture.needsUpdate = true;
+              successSprite.visible = true;
+              
+              setQualityGrade(grade);
+              setGameState(GAME_STATES.SUCCESS);
+            };
           }
         }
       }
